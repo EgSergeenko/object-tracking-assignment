@@ -39,7 +39,7 @@ def tracker_soft(el, id_info, num):
     tracks = {}
     # присваиваем айдишники от 0 до кол-ва кантриболов на первом кадре
     if el['frame_id'] == 1:
-        for num in range(country_balls_amount):
+        for num in range(len(el['data'])):
             el['data'][num]['track_id'] = num
             if any(el['data'][num]['bounding_box']):
                 tracks[num] = get_centroid(el['data'][num]['bounding_box'])
@@ -47,7 +47,7 @@ def tracker_soft(el, id_info, num):
 
         return el, tracks, num
 
-    for i in range(country_balls_amount):
+    for i in range(len(el['data'])):
         if any(el['data'][i]['bounding_box']):            
             center_coordinates = get_centroid(el['data'][i]['bounding_box'])
             if len(id_info) != 0:
@@ -98,7 +98,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # класса CountryBall на фронте
     await websocket.send_text(str(country_balls))
     for el in track_data:
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
         # TODO: part 1
         if el['frame_id'] == 1:
             id_info = {}

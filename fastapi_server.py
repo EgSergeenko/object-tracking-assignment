@@ -1,8 +1,14 @@
 from fastapi import FastAPI, WebSocket
-from track_5 import track_data, country_balls_amount
+from track_3 import track_data, country_balls_amount
 import asyncio
 import glob
 import numpy as np
+from deep_sort_realtime.deepsort_tracker import DeepSort
+import cv2
+import numpy as np
+
+
+from metrics import MetricsAccumulator
 
 app = FastAPI(title='Tracker assignment')
 imgs = glob.glob('imgs/*')
@@ -66,27 +72,35 @@ def tracker_soft(el, id_info, num):
     return el, tracks, num
 
 
-def tracker_strong(el):
-    """
-    Необходимо изменить у каждого словаря в списке значение поля 'track_id' так,
-    чтобы как можно более длительный период времени 'track_id' соответствовал
-    одному и тому же кантри болу.
+def xywh(list_a):
+    x_l_up, y_l_up, x_r_down, y_r_down = list_a
+    h = y_r_down - y_l_up
+    w = x_r_down - x_l_up
+    return [x_l_up, y_l_up, w, h]
 
-    Исходные данные: координаты рамки объектов, скриншоты прогона
 
-    Ограничения:
-    - вы можете использовать любые доступные подходы, за исключением
-    откровенно читерных, как например захардкодить заранее правильные значения
-    'track_id' и т.п.
-    - значение по ключу 'cb_id' является служебным, служит для подсчета метрик качества
-    вашего трекера, использовать его в алгоритме трекера запрещено
-    - запрещается присваивать один и тот же track_id разным объектам на одном фрейме
+def tracker_strong(el, tracker):
+    bbs = []
+    im = cv2.imread('frame/' + str(el['frame_id']) + '.png')
+    frame = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+    for i in range(len(el['data'])):
+        if any(el['data'][i]['bounding_box']):
+            bbs.append((xywh(el['data'][i]['bounding_box']), 1, 0))
 
-    P.S.: если вам нужны сами фреймы, измените в index.html значение make_screenshot
-    на true для первого прогона, на повторном прогоне можете читать фреймы из папки
-    и по координатам вырезать необходимые регионы.
-    TODO: Ужасный костыль, на следующий поток поправить
-    """
+    tracks = tracker.update_tracks(bbs, frame=frame)  # bbs expected to be a list of detections, each in tuples of ( [left,top,w,h], confidence, detection_class )
+
+    bb_track = {i.track_id: get_centroid(i.to_ltrb()) for i in tracks}
+
+    for i in range(len(el['data'])):
+        if el['data'][i]['bounding_box']:
+            if len(bb_track):
+                centr_el = get_centroid(el['data'][i]['bounding_box'])
+                id, _ = min(bb_track.items(),
+                    key=lambda x: euclidian_metric(x[1], centr_el))
+
+                el['data'][i]['track_id'] = id
+                del bb_track[id]
+
     return el
 
 
@@ -96,16 +110,23 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     # отправка служебной информации для инициализации объектов
     # класса CountryBall на фронте
+    tracker = DeepSort(max_age=5)
     await websocket.send_text(str(country_balls))
+
+    accumulator = MetricsAccumulator()
+
     for el in track_data:
         await asyncio.sleep(0.5)
         # TODO: part 1
         if el['frame_id'] == 1:
             id_info = {}
             num = 0
-        el, id_info, num = tracker_soft(el, id_info, num)
+        el_soft, id_info, num = tracker_soft(el, id_info, num)
+
         # TODO: part 2
-        # el = tracker_strong(el)
+        el_strong = tracker_strong(el, tracker)
         # отправка информации по фрейму
-        await websocket.send_json(el)
+        await websocket.send_json(el_strong)
+        accumulator.update(el_strong)
     print('Bye..')
+

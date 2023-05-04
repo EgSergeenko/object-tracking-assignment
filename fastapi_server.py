@@ -1,10 +1,12 @@
 from fastapi import FastAPI, WebSocket
-from track_3 import track_data, country_balls_amount
+from track_5 import track_data, country_balls_amount
 import asyncio
 import glob
 from deep_sort_realtime.deepsort_tracker import DeepSort
 import cv2
-from PIL import Image
+import numpy as np
+
+
 
 app = FastAPI(title='Tracker assignment')
 imgs = glob.glob('imgs/*')
@@ -29,51 +31,40 @@ def tracker_soft(el):
     return el
 def xywh(list_a):
     x_l_up, y_l_up, x_r_down, y_r_down = list_a
-    w = y_r_down - y_l_up
-    h = x_r_down - x_l_up
+    h = y_r_down - y_l_up
+    w = x_r_down - x_l_up
     return [x_l_up, y_l_up, w, h]
+
+def get_centroid(bbox: list):
+    x_l_up, y_l_up, x_r_down, y_r_down = bbox
+    x_center = x_l_up + int((x_r_down - x_l_up) / 2)
+    y_center = y_l_up + int((y_r_down - y_l_up) / 2)
+    return np.array([x_center, y_center])
+def euclidian_metric(array_a, array_b):
+    return np.sqrt(np.sum((array_a - array_b) ** 2))
+
 
 def tracker_strong(el, tracker):
     bbs = []
-    frame = cv2.imread('frame/' + str(el['frame_id']) + '.png')
-    cv2.imshow('image', frame)
+    im = cv2.imread('frame/' + str(el['frame_id']) + '.png')
+    frame = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
     for i in range(len(el['data'])):
         if any(el['data'][i]['bounding_box']):
             bbs.append((xywh(el['data'][i]['bounding_box']), 1, 0))
 
     tracks = tracker.update_tracks(bbs, frame=frame)  # bbs expected to be a list of detections, each in tuples of ( [left,top,w,h], confidence, detection_class )
 
-    # for track in tracks:
-    #     for i in range(len(el['data'])):
-    #     # print(xywh(el['data'][i]['bounding_box']))
-    #     # print(track.to_ltrb())
-    #         if not track.is_confirmed():
-    #                 continue
-    #         if not any(el['data'][i]['bounding_box']):
-    #             el['data'][i]['track_id'] = None
-    #             continue
-    #         if xywh(el['data'][i]['bounding_box'])[0] == track.to_ltrb()[0] and \
-    #                 xywh(el['data'][i]['bounding_box'])[1] == track.to_ltrb()[1]:
-    #             el['data'][i]['track_id'] = track.track_id
-    #     # if not track.is_confirmed():
-    #     #         continue
-    #     # track_id = track.track_id
-    #     # el['data'][i]['track_id'] = track.track_id
-    #     # ltrb = track.to_ltrb()
+    bb_track = {i.track_id: get_centroid(i.to_ltrb()) for i in tracks}
+
     for i in range(len(el['data'])):
-        pass
-    #TODO для всех эл-тов, у которых есть бб, присв ID
-    # когда у эл нет бб, заносим в список
-    # среди треков дипсорт поискать свободные ИД и рандомно раскидать по списку с пустыми бб
+        if el['data'][i]['bounding_box']:
+            if len(bb_track):
+                centr_el = get_centroid(el['data'][i]['bounding_box'])
+                id, _ = min(bb_track.items(),
+                    key=lambda x: euclidian_metric(x[1], centr_el))
 
-
-    for i, track in enumerate(tracks):
-            if not track.is_confirmed():
-                    continue
-            if not any(el['data'][i]['bounding_box']):
-                el['data'][i]['track_id'] = None
-                continue
-            el['data'][i]['track_id'] = track.track_id
+                el['data'][i]['track_id'] = id
+                del bb_track[id]
 
     return el
 
@@ -86,6 +77,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # класса CountryBall на фронте
     tracker = DeepSort(max_age=5)
     await websocket.send_text(str(country_balls))
+
     for el in track_data:
         await asyncio.sleep(0.5)
         # TODO: part 1
@@ -95,3 +87,4 @@ async def websocket_endpoint(websocket: WebSocket):
         # отправка информации по фрейму
         await websocket.send_json(el)
     print('Bye..')
+
